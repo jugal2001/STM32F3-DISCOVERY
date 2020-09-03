@@ -34,7 +34,7 @@ int main()
 {
 	RCC->AHBENR |= RCC_AHBENR_GPIOAEN;
 	GPIOA->MODER |= GPIO_MODER_MODER15_1;   //PA15 alternate function mode
-	GPIOA->AFR[1] |= 1<<28;  		//AF2 (TIM2 CH1 output)
+	GPIOA->AFR[1] |= 1<<28;  		//AF1 (TIM2 CH1 output)
 	
 	
 	SystemCoreClockUpdate();
