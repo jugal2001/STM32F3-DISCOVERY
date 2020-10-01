@@ -5,7 +5,7 @@ volatile int rxData = 0;
 void uart_init(void) {
 	RCC->APB2ENR |= RCC_APB2ENR_USART1EN;  // enable clock for USART1
 	//baud rate = (Fclk/USARTDIV)
-	USART1->BRR |= 5000; 			//9600 baud Fclk = 48Mhz
+	USART1->BRR |= 833; 			//9600 baud Fclk = 8Mhz (RESET VALUE)
 	USART1->CR1 |= USART_CR1_RE | USART_CR1_UE;
 }
 void SysTick_Handler(void) {
