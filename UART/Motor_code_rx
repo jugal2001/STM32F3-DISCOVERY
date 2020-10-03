@@ -17,11 +17,13 @@
  */
 
 #include "stm32f303xc.h"
-#include <stdlib.h>
+#include "stdlib.h"
 
 volatile int myTicks = 0;
 volatile uint16_t samples[2] = { 0, 0 };
+volatile uint16_t test[2] = { 0, 0 };
 volatile uint16_t data = 0;
+volatile int val[2] = {0,0};
 //x -> samlpes[0]
 //y -> samples[1]
 
@@ -90,7 +92,7 @@ void Timer_Initialize() {
 	TIM1->CCMR1 |= (TIM_CCMR1_OC1M_1 | TIM_CCMR1_OC1M_2); //PWM Mode 1 for Channel 1
 	TIM1->CCMR1 |= (TIM_CCMR1_OC2M_1 | TIM_CCMR1_OC2M_2); //PWM Mode 1 for Channel 2
 
-	TIM1->PSC = 1;   //freq/1 = 72 Mhz
+	TIM1->PSC = 16;   //freq/1 = 72 Mhz
 	TIM1->ARR = 4095;   //16 Bit Value
 	TIM1->CCR1 = 0;
 	TIM1->CCR2 = 0;
@@ -141,6 +143,7 @@ void UART_Read() {
 			samples[1] |= data << 6;
 			j++;
 		}
+
 	}
 }
 
@@ -166,20 +169,20 @@ int mapp(float k, float l, float h, float L, float H) {
 }
 
 int read(int k) {
-	int val = 0;
-	val = samples[k];
-	val = mapp(val, 0, 4095, -4095, 4095);
 
-	if (abs(val) < 600)
-		val = 0;
+	val[k] =samples[k];
+	val[k] = mapp(val[k], 0, 4095, -4095, 4095);
 
-	if (val < -3900)
-		val = -4095;
+	if (abs(val[k]) < 600)
+		val[k] = 0;
 
-	if (val > 3900)
-		val = 4095;
+	if (val[k] < -3900)
+		val[k] = -4095;
 
-	return val;
+	if (val[k] > 3900)
+		val[k] = 4095;
+
+	return val[k];
 }
 
 int Toggle(int a) {
@@ -285,6 +288,8 @@ int main() {
 	int k = 0;
 	while (1) {
 		UART_Read();
+		test[0]=samples[0];
+		test[1]=samples[1];
 		x_read = read(0);   //Read mapped x co-ordinate of Joystick
 		y_read = read(1);   //Read mapped y co-ordinate of Joystick
 
@@ -306,7 +311,7 @@ int main() {
 			break;
 
 		default:
-			delay_ms(1);
+			;
 		}
 
 	}
