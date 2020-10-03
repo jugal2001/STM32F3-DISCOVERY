@@ -23,21 +23,21 @@ volatile int myTicks = 0;
 volatile uint16_t samples[2] = { 0, 0 };
 volatile uint16_t test[2] = { 0, 0 };
 volatile uint16_t data = 0;
+volatile int bruh = 0;
 volatile int val[2] = {0,0};
 //x -> samlpes[0]
 //y -> samples[1]
+void MotorCode(int, int);
 
-void SysTick_Initialize() {
-	SystemCoreClockUpdate();
-	SysTick_Config(SystemCoreClock / 1000);
-}
 void SysTick_Handler() {
 	myTicks++;
 }
-void delay_ms(int del) {
-	myTicks = 0;
-	while (myTicks < del)
+void delay_ms(int ms) {
+	SystemCoreClockUpdate();
+	SysTick_Config(SystemCoreClock / 1000);
+	while (myTicks < ms)
 		;
+	SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk); //disable systick
 }
 
 void GPIO_Initialize() {
@@ -115,15 +115,25 @@ void UART_Read() {
 	samples[0] = 0;
 	samples[1] = 0;
 	int i = 0, j = 0;
+
+	SystemCoreClockUpdate();
+	SysTick_Config(SystemCoreClock);
+
 	while ((i < 2) || (j < 2)) {		//will keep on receiving until both X and Y are fully updated once
 		while (!(USART1->ISR & USART_ISR_RXNE))
-			;   //Check Status register if all is Received
+			if(myTicks==2)
+				break;
 		data = (USART1->RDR);
-
+		if (myTicks == 2)
+		{
+			samples[0] = 2047;
+			samples[1] = 2047;
+			break;
+		}
 		//DATA FRAME:
 		// 2 MSB MASK-> M +	//6 BITS DATA-> D
 				  //MMDDDDDD
-		if ((data & 0xC0) == 0) {			// X LOW - 00
+		else if ((data & 0xC0) == 0) {			// X LOW - 00
 			data &= 0x3F;					// remove mask bits
 			samples[0] |= data;
 			i++;
@@ -145,6 +155,8 @@ void UART_Read() {
 		}
 
 	}
+	myTicks=0;
+	SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk); //disable systick
 }
 
 //        |Left    Right| |      Left PWM       |  |      Right PWM     | |  Values  |
@@ -277,7 +289,7 @@ void MotorCode(int x, int y) {
 }
 
 int main() {
-	SysTick_Initialize();
+
 	GPIO_Initialize();
 	Timer_Initialize();
 	UART_Initialize();
