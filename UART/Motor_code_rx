@@ -117,14 +117,14 @@ void UART_Read() {
 	int i = 0, j = 0;
 
 	SystemCoreClockUpdate();
-	SysTick_Config(SystemCoreClock);
+	SysTick_Config(SystemCoreClock);	//generates interrupt every 1 second
 
 	while ((i < 2) || (j < 2)) {		//will keep on receiving until both X and Y are fully updated once
 		while (!(USART1->ISR & USART_ISR_RXNE))
 			if(myTicks==2)
 				break;
 		data = (USART1->RDR);
-		if (myTicks == 2)
+		if (myTicks == 2)		//no new data received for 2 seconds
 		{
 			samples[0] = 2047;
 			samples[1] = 2047;
