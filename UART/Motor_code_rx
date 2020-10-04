@@ -15,19 +15,13 @@
  UART Rx: PC5
  Masking(Last bit): x -> 0 ,y -> 1
  */
-
+//x -> samlpes[0]
+//y -> samples[1]
 #include "stm32f303xc.h"
 #include "stdlib.h"
 
 volatile int myTicks = 0;
-volatile uint16_t samples[2] = { 0, 0 };
-volatile uint16_t test[2] = { 0, 0 };
-volatile uint16_t data = 0;
-volatile int bruh = 0;
-volatile int val[2] = {0,0};
-//x -> samlpes[0]
-//y -> samples[1]
-void MotorCode(int, int);
+volatile uint16_t rxData[2] = { 0, 0 };
 
 void SysTick_Handler() {
 	myTicks++;
@@ -112,50 +106,48 @@ void UART_Initialize() {
 
 void UART_Read() {
 	//reset data array
-	samples[0] = 0;
-	samples[1] = 0;
+	rxData[0] = 0;
+	rxData[1] = 0;
 	int i = 0, j = 0;
-
+	int buffer;
 	SystemCoreClockUpdate();
-	SysTick_Config(SystemCoreClock);	//generates interrupt every 1 second
+	SysTick_Config(SystemCoreClock);
 
-	while ((i < 2) || (j < 2)) {		//will keep on receiving until both X and Y are fully updated once
-		while (!(USART1->ISR & USART_ISR_RXNE))
-			if(myTicks==2)
+	//will keep on receiving until both X and Y are fully updated once
+	while ((i < 2) || (j < 2)) {
+		while (!(USART1->ISR & USART_ISR_RXNE)) {
+			if (myTicks == 2)
 				break;
-		data = (USART1->RDR);
-		if (myTicks == 2)		//no new data received for 2 seconds
-		{
-			samples[0] = 2047;
-			samples[1] = 2047;
+		}
+		buffer = USART1->RDR;
+		if (myTicks == 2) {
+			rxData[0] = 2047;
+			rxData[1] = 2047;
 			break;
 		}
 		//DATA FRAME:
 		// 2 MSB MASK-> M +	//6 BITS DATA-> D
-				  //MMDDDDDD
-		else if ((data & 0xC0) == 0) {			// X LOW - 00
-			data &= 0x3F;					// remove mask bits
-			samples[0] |= data;
+		//MMDDDDDD
+		else if ((buffer & 0xC0) == 0) {		// X LOW - 00
+			buffer &= 0x3F;						// remove mask bits
+			rxData[0] |= buffer;
 			i++;
-		}
-		else if ((data & 0xC0) == 0x40){	// X HIGH - 01
-			data &= 0x3F;					// remove mask bits
-			samples[0] |= data << 6;
+		} else if ((buffer & 0xC0) == 0x40) {	// X HIGH - 01
+			buffer &= 0x3F;						// remove mask bits
+			rxData[0] |= buffer << 6;
 			i++;
-		}
-		else if ((data & 0xC0) == 0x80){	// Y LOW - 10
-			data &= 0x3F;					// remove mask bits
-			samples[1] |= data;
+		} else if ((buffer & 0xC0) == 0x80) {	// Y LOW - 10
+			buffer &= 0x3F;						// remove mask bits
+			rxData[1] |= buffer;
 			j++;
-		}
-		else if ((data & 0xC0) == 0xC0){	// Y HIGH - 11
-			data &= 0x3F;					// remove mask bits
-			samples[1] |= data << 6;
+		} else if ((buffer & 0xC0) == 0xC0) {	// Y HIGH - 11
+			buffer &= 0x3F;						// remove mask bits
+			rxData[1] |= buffer << 6;
 			j++;
 		}
 
 	}
-	myTicks=0;
+	myTicks = 0;
 	SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk); //disable systick
 }
 
@@ -180,34 +172,28 @@ int mapp(float k, float l, float h, float L, float H) {
 	return ((k - l) / (h - l)) * (H - L) + L;
 }
 
-int read(int k) {
-
-	val[k] =samples[k];
-	val[k] = mapp(val[k], 0, 4095, -4095, 4095);
-
-	if (abs(val[k]) < 600)
-		val[k] = 0;
-
-	if (val[k] < -3900)
-		val[k] = -4095;
-
-	if (val[k] > 3900)
-		val[k] = 4095;
-
-	return val[k];
-}
-
-int Toggle(int a) {
-	if (a == 0)
-		a = 1;
-
-	else
-		a = 0;
-
-	return a;
-}
-
 void MotorCode(int x, int y) {
+	x = mapp(x, 0, 4095, -4095, 4095);
+	y = mapp(y, 0, 4095, -4095, 4095);
+
+	if (abs(x) < 600)
+		x = 0;
+
+	else if (x < -3900)
+		x = -4095;
+
+	else if (x > 3900)
+		x = 4095;
+
+	if (abs(y) < 600)
+		y = 0;
+
+	else if (y < -3900)
+		y = -4095;
+
+	else if (y > 3900)
+		y = 4095;
+
 	if (abs(x) < 20 && abs(y) < 20)   //No Motion
 		Drive(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
@@ -294,37 +280,24 @@ int main() {
 	Timer_Initialize();
 	UART_Initialize();
 
-	int x_read = 0, y_read = 0;
 	int button = 0;
 	int prev_button = 0;
 	int k = 0;
 	while (1) {
 		UART_Read();
-		test[0]=samples[0];
-		test[1]=samples[1];
-		x_read = read(0);   //Read mapped x co-ordinate of Joystick
-		y_read = read(1);   //Read mapped y co-ordinate of Joystick
 
 		button = (GPIOA->IDR & GPIO_IDR_0);
 		if (button && !(prev_button))   //Button Press
 				{
-			k = Toggle(k);
+			k = ~k;
 			prev_button = 1;
 		} else {
 			prev_button = (GPIOA->IDR & GPIO_IDR_0);
 		}
 
-		switch (k) {
-		case 1:
-			break;
-
-		case 0:
-			MotorCode(x_read, y_read);
-			break;
-
-		default:
+		if (k)
 			;
-		}
-
+		else
+			MotorCode(rxData[0], rxData[1]);
 	}
 }
