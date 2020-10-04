@@ -1,0 +1,285 @@
+/*
+ Code implements Motor Code and Hill Assist on LEDs thru PWM with Timer1, by reading Joystick values
+ from another STM32 and transfered via UART
+ Onboard Button has been used to implement HillAssist
+ Setup:
+ All LEDs are Onboard
+ Button: PA0(onboard)
+ PWM LEDs: LD3(PE9->Ch1), LD7(PE11->Ch2)
+ Direction LEDs: LD6(PE15), LD10(PE13)
+
+ Left     	     Right
+ LED:  LD10(PE13)     LD6(PE15)
+ PWM:  LD7(PE11)      LD3(PE9)
+
+ UART Rx: PC5
+ Masking(Last bit): x -> 0 ,y -> 1
+ */
+//x -> rxData[0]
+//y -> rxData[1]
+#include "stm32f303xc.h"
+#include "stdlib.h"
+
+volatile int myTicks = 0;
+volatile uint16_t rxData[2] = { 0, 0 };
+
+void SysTick_Handler() {
+	myTicks++;
+}
+void delay_ms(int ms) {
+	SystemCoreClockUpdate();
+	SysTick_Config(SystemCoreClock / 1000);
+	while (myTicks < ms)
+		;
+	SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk); //disable systick
+}
+
+void GPIO_Initialize() {
+	//Enable Clocks:
+	RCC->AHBENR |= RCC_AHBENR_GPIOAEN;   //Enable Clock for Port A
+	RCC->AHBENR |= RCC_AHBENR_GPIOCEN;   //Enable Clock for Port C
+	RCC->AHBENR |= RCC_AHBENR_GPIOEEN;   //Enable Clock for Port E
+
+	//Setup PA0:
+	GPIOA->MODER &= ~(GPIO_MODER_MODER0);   //Enable as INPUT
+	GPIOA->PUPDR |= GPIO_PUPDR_PUPDR0_1;   //Enable Pull-Down
+	GPIOA->PUPDR &= ~(GPIO_PUPDR_PUPDR0_0);
+
+	//Setup PC5:
+	GPIOC->MODER |= GPIO_MODER_MODER5_1;   //Enable AF
+	GPIOC->PUPDR &= ~(GPIO_PUPDR_PUPDR5_0);
+	GPIOC->AFR[0] |= 7 << 20;   //AF 7
+
+	//Setup PE15:
+	GPIOE->MODER &= ~(GPIO_MODER_MODER15_1);   //Enable as OUTPUT
+	GPIOE->MODER |= GPIO_MODER_MODER15_0;
+	GPIOE->OTYPER &= ~(GPIO_OTYPER_OT_15);   //Output Push-Pull
+	GPIOE->OSPEEDR |= (GPIO_OSPEEDER_OSPEEDR15);   //High Speed
+
+	//Setup PE13:
+	GPIOE->MODER &= ~(GPIO_MODER_MODER13_1);   //Enable as OUTPUT
+	GPIOE->MODER |= GPIO_MODER_MODER13_0;
+	GPIOE->OTYPER &= ~(GPIO_OTYPER_OT_13);   //Output Push-Pull
+	GPIOE->OSPEEDR |= (GPIO_OSPEEDER_OSPEEDR13);   //High Speed
+
+	//Setup PE9:
+	//Enable AF Mode:
+	GPIOE->MODER |= GPIO_MODER_MODER9_1;
+	GPIOE->MODER &= ~(GPIO_MODER_MODER9_0);
+	GPIOE->AFR[1] |= 1 << 5;
+
+	//Setup PE11:
+	//Enable AF Mode:
+	GPIOE->MODER |= GPIO_MODER_MODER11_1;
+	GPIOE->MODER &= ~(GPIO_MODER_MODER11_0);
+	GPIOE->AFR[1] |= 1 << 13;
+}
+
+void Timer_Initialize() {
+	RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;   //Enable Timer1
+	TIM1->CCER |= TIM_CCER_CC1E | TIM_CCER_CC2E; //Enable Channel 1 & 2 as OUTPUT
+	TIM1->CR1 |= TIM_CR1_ARPE;   //Enable Auto Re-Load Preload (ARPE)
+
+	TIM1->CCMR1 |= TIM_CCMR1_OC1PE;   //Enable PreLoad for Channel 1
+	TIM1->CCMR1 |= TIM_CCMR1_OC2PE;   //Enable PreLoad for Channel 2
+
+	TIM1->CCMR1 |= (TIM_CCMR1_OC1M_1 | TIM_CCMR1_OC1M_2); //PWM Mode 1 for Channel 1
+	TIM1->CCMR1 |= (TIM_CCMR1_OC2M_1 | TIM_CCMR1_OC2M_2); //PWM Mode 1 for Channel 2
+
+	TIM1->PSC = 16;   //freq/1 = 72 Mhz
+	TIM1->ARR = 4095;   //16 Bit Value
+	TIM1->CCR1 = 0;
+	TIM1->CCR2 = 0;
+
+	TIM1->BDTR |= TIM_BDTR_MOE;   //Main Output Enable
+
+	TIM1->EGR |= TIM_EGR_UG;   //Update Registers
+	TIM1->CR1 |= TIM_CR1_CEN;   //Start Counting
+}
+
+void UART_Initialize() {
+	RCC->APB2ENR |= RCC_APB2ENR_USART1EN;   //UART Enable
+	USART1->BRR |= 833;   //Baud Rate: 9600
+	//               Rx Enable    UART Enable
+	USART1->CR1 |= USART_CR1_RE | USART_CR1_UE;
+}
+
+void UART_Read() {
+	int buffer, i = 0;
+	SystemCoreClockUpdate();
+	SysTick_Config(SystemCoreClock * 2);			//generates interrupt every 2 seconds (safety feature)
+	myTicks = 0;
+	//will keep on receiving until both X and Y are fully updated once
+	while (buffer != 0xC0 && (!myTicks)) {				// 0xC0 is our unique number (indicates start of frame)
+		while (!(USART1->ISR & USART_ISR_RXNE) && (!myTicks))
+			;
+		buffer = USART1->RDR;
+	}
+	while (i < 2 && (!myTicks)) {
+
+		while (!(USART1->ISR & USART_ISR_RXNE) && (!myTicks))
+			;
+		rxData[i] = USART1->RDR;
+		while (!(USART1->ISR & USART_ISR_RXNE) && (!myTicks))
+			;
+		rxData[i] |= USART1->RDR << 6;
+
+		i++;
+	}
+	if (myTicks) {
+		rxData[0] = 2047;
+		rxData[1] = 2047;
+	}
+	 myTicks = 0;
+	 SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk); //disable systick
+}
+
+//        |Left    Right| |      Left PWM       |  |      Right PWM     | |  Values  |
+void Drive(int DL, int DR, int oct0, int a, int b, int oct1, int p, int q,
+		int X, int Y) {
+	if (DL == 1)
+		GPIOE->BSRR |= 1 << 13;   //Turn on LEFT LED
+	else
+		GPIOE->BRR |= 1 << 13;   //Turn off LEFT LED
+
+	if (DR == 1)
+		GPIOE->BSRR |= 1 << 15;   //Turn on RIGHT LED
+	else
+		GPIOE->BRR |= 1 << 15;   //Turn off RIGHT LED
+
+	TIM1->CCR2 = (uint32_t) abs(4095 * oct0 - abs(X * a) - abs(Y * b)); //Left PWM
+	TIM1->CCR1 = (uint32_t) abs(4095 * oct1 - abs(X * p) - abs(Y * q)); //Right PWM
+}
+
+int mapp(float k, float l, float h, float L, float H) {
+	return ((k - l) / (h - l)) * (H - L) + L;
+}
+
+void MotorCode(int x, int y) {
+	x = mapp(x, 0, 4095, -4095, 4095);
+	y = mapp(y, 0, 4095, -4095, 4095);
+
+	if (abs(x) < 600)
+		x = 0;
+
+	else if (x < -3900)
+		x = -4095;
+
+	else if (x > 3900)
+		x = 4095;
+
+	if (abs(y) < 600)
+		y = 0;
+
+	else if (y < -3900)
+		y = -4095;
+
+	else if (y > 3900)
+		y = 4095;
+
+	if (abs(x) < 20 && abs(y) < 20)   //No Motion
+		Drive(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+	else if (abs(x) < 10 && y < 0)   //Full Forward
+		Drive(1, 1, 0, 0, 1, 0, 0, 1, x, y);
+
+	else if (abs(x) < 10 && y > 0)   //Full Backward
+		Drive(0, 0, 0, 0, 1, 0, 0, 1, x, y);
+
+	else if (x < 0 && abs(y) <= 20)   //Spot Turn Left
+		Drive(0, 1, 0, 1, 0, 0, 1, 0, x, y);
+
+	else if (x > 0 && abs(y) <= 20)   //Spot Turn Right
+		Drive(1, 0, 0, 1, 0, 0, 1, 0, x, y);
+
+	else if (x > 0 && y < 0 && x >= abs(y))   //Octet 1
+			{
+		if (abs(x) > 4095 - abs(y))
+			Drive(1, 0, 0, 1, 0, 1, 0, 1, x, y);
+		else
+			Drive(1, 0, 1, 0, 1, 0, 1, 0, x, y);
+	}
+
+	else if (x > 0 && y < 0 && x < abs(y))   //Octet 2
+			{
+		if (abs(y) > 4095 - abs(x))
+			Drive(1, 1, 0, 0, 1, 1, 1, 0, x, y);
+		else
+			Drive(1, 1, 1, 1, 0, 0, 0, 1, x, y);
+	}
+
+	else if (x < 0 && y < 0 && abs(y) > abs(x))   //Octet 3
+			{
+		if (abs(y) > 4095 - abs(x))
+			Drive(1, 1, 1, 1, 0, 0, 0, 1, x, y);
+		else
+			Drive(1, 1, 0, 0, 1, 1, 1, 0, x, y);
+	}
+
+	else if (x < 0 && y < 0 && abs(x) >= abs(y))   //Octet 4
+			{
+		if (abs(x) > 4095 - abs(y))
+			Drive(0, 1, 1, 0, 1, 0, 1, 0, x, y);
+		else
+			Drive(0, 1, 0, 1, 0, 1, 0, 1, x, y);
+	}
+
+	else if (x < 0 && y > 0 && abs(x) > abs(y))   //Octet 5
+			{
+		if (abs(x) > 4095 - abs(y))
+			Drive(0, 1, 0, 1, 0, 1, 0, 1, x, y);
+		else
+			Drive(0, 1, 1, 0, 1, 0, 1, 0, x, y);
+	}
+
+	else if (x < 0 && y > 0 && abs(y) >= abs(x))   //Octet 6
+			{
+		if (abs(y) > 4095 - abs(x))
+			Drive(0, 0, 0, 0, 1, 1, 1, 0, x, y);
+		else
+			Drive(0, 0, 1, 1, 0, 0, 0, 1, x, y);
+	}
+
+	else if (x > 0 && y > 0 && abs(y) >= abs(x))   //Octet 7
+			{
+		if (abs(y) > 4095 - abs(x))
+			Drive(0, 0, 1, 1, 0, 0, 0, 1, x, y);
+		else
+			Drive(0, 0, 0, 0, 1, 1, 1, 0, x, y);
+	}
+
+	else if (x > 0 && y > 0 && abs(x) > abs(y))   //Octet 8
+			{
+		if (abs(x) > 4095 - abs(y))
+			Drive(1, 0, 1, 0, 1, 0, 1, 0, x, y);
+		else
+			Drive(1, 0, 0, 1, 0, 1, 0, 1, x, y);
+	}
+}
+
+int main() {
+
+	GPIO_Initialize();
+	Timer_Initialize();
+	UART_Initialize();
+
+	int button = 0;
+	int prev_button = 0;
+	int k = 0;
+	while (1) {
+		UART_Read();
+		button = (GPIOA->IDR & GPIO_IDR_0);
+		if (button && !(prev_button))   //Button Press
+				{
+			k = ~k;
+			prev_button = 1;
+		} else {
+			prev_button = (GPIOA->IDR & GPIO_IDR_0);
+		}
+
+		if (k)
+			;
+		else
+			MotorCode(rxData[0], rxData[1]);
+	}
+}
