@@ -13,7 +13,7 @@
  PWM:  LD7(PE11)      LD3(PE9)
 
  UART Rx: PC5
- Masking(Last bit): x -> 0 ,y -> 1
+
  */
 //x -> rxData[0]
 //y -> rxData[1]
