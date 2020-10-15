@@ -1,0 +1,59 @@
+//SPI RX SLAVE full duplex
+//8Mhz
+#include "stm32f3xx.h"
+
+volatile int data = 0;
+void spi_init()
+{
+    RCC->AHBENR |= RCC_AHBENR_GPIOAEN;
+
+    //NSS1 ----PA4  AF output push pull
+    GPIOA->MODER |= GPIO_MODER_MODER4_1;
+    GPIOA->OSPEEDR |= GPIO_OSPEEDER_OSPEEDR4_0;
+    GPIOA->AFR[0] |= 5<<GPIO_AFRL_AFRL4_Pos;
+
+    //SCK ----PA5   AF output push pull
+    GPIOA->MODER |= GPIO_MODER_MODER5_1;
+    GPIOA->OSPEEDR |= GPIO_OSPEEDER_OSPEEDR5_0;
+    GPIOA->AFR[0] |= 5<<GPIO_AFRL_AFRL5_Pos;
+
+    //MISO ----PA6
+    GPIOA->MODER |= GPIO_MODER_MODER6_1;
+    GPIOA->AFR[0] |= 5<<GPIO_AFRL_AFRL6_Pos;
+    
+    //MOSI ----PA7   AF output push pull
+    GPIOA->MODER |= GPIO_MODER_MODER7_1;
+    GPIOA->OSPEEDR |= GPIO_OSPEEDER_OSPEEDR7_0;
+    GPIOA->AFR[0] |= 5<<GPIO_AFRL_AFRL7_Pos;
+
+    RCC->APB2ENR |= RCC_APB2ENR_SPI1EN; //spi clock en
+    SPI1->CR1 |= SPI_CR1_BR_0;          //baud rate (/4)
+    SPI1->CR1 |= SPI_CR1_MSTR;          //select master mode
+    SPI1->CR2 |= SPI_CR2_SSOE;          //enable SS output
+    SPI1->CR1 |= SPI_CR1_SPE;           //enable spi
+}
+void delay_ms(uint16_t ms)
+{
+    TIM3->ARR = ms;
+    TIM3->EGR = 1;
+    TIM3->CR1 |= TIM_CR1_CEN;
+    while (!(TIM3->SR & TIM_SR_UIF))
+        ;
+    TIM3->SR &= ~TIM_SR_UIF;
+}
+int main()
+{
+    //timer 3 settings for delay (8Mhz only)
+    RCC->APB1ENR |= RCC_APB1ENR_TIM3EN;
+    TIM3->PSC = 8000;
+    TIM3->CR1 |= TIM_CR1_ARPE;
+    TIM3->CR1 |= TIM_CR1_OPM | TIM_CR1_URS;
+    spi_init();
+    while (1)
+    {
+        delay_ms(2000);
+        SPI1->DR = 10;
+        while (!(SPI1->SR & SPI_SR_TXE))
+            ;
+    }
+}
